@@ -1,1 +1,363 @@
 # Attendents
+
+<html lang="bn">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>কর্মচারী হাজিরা অ্যাপ</title>
+  <!--
+    =====================
+    Version: 2.0 – মাল্টি‑ডে, CSV, Print, Cloud Sync
+    =====================
+    ⚙️ Cloud Sync ব্যবহার করতে firebaseEnabled = true করে
+    firebaseConfig অবজেক্টে আপনার তথ্য বসিয়ে দিন।
+  -->
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      padding: 2rem;
+      background: #fafafa;
+      color: #333;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      background: #ffeb3b;
+      border-radius: 0.5rem;
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+    }
+    label { font-weight: 600; }
+    input[type="text"],
+    input[type="date"],
+    select {
+      padding: 0.5rem 0.75rem;
+      margin-left: 0.25rem;
+      border: 1px solid #ccc;
+      border-radius: 0.375rem;
+      min-width: 200px;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 0.375rem;
+      background: #ffeb3b;
+      cursor: pointer;
+      font-weight: 600;
+      margin-left: 0.5rem;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+      transition: transform 0.1s ease;
+    }
+    button:hover { transform: translateY(-2px); }
+    .table-wrapper { overflow-x: auto; margin-top: 2rem; }
+    table { width: 100%; border-collapse: collapse; min-width: 400px; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: center; }
+    th { background: #fff9c4; }
+    tr.present { background: #e8f5e9; }
+    tr.absent { background: #ffebee; }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    .actions { margin-top: 1.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+    /* Print styles */
+    @media print {
+      body { padding: 0; }
+      .controls, .actions { display: none !important; }
+      h1 { box-shadow: none; }
+      th, td { font-size: 12px; padding: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>কর্মচারী হাজিরা অ্যাপ</h1>
+
+  <div class="controls">
+    <div>
+      <label for="date">তারিখ:</label>
+      <input type="date" id="date" />
+    </div>
+
+    <div>
+      <label for="viewSelect">ভিউ:</label>
+      <select id="viewSelect">
+        <option value="single">একদিন</option>
+        <option value="week">সপ্তাহ</option>
+        <option value="month">মাস</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="employeeName">নতুন কর্মচারী যোগ করুন:</label>
+      <input type="text" id="employeeName" placeholder="নাম লিখুন" />
+      <button id="addEmployeeBtn">যোগ করুন</button>
+    </div>
+  </div>
+
+  <div class="table-wrapper">
+    <table id="attendanceTable">
+      <thead id="attendanceHead"></thead>
+      <tbody id="attendanceBody"></tbody>
+    </table>
+  </div>
+
+  <div class="actions">
+    <button id="saveBtn">সংরক্ষণ করুন</button>
+    <button id="exportBtn">CSV ডাউনলোড</button>
+    <button id="printBtn">প্রিন্ট</button>
+    <button id="clearBtn">সব ডেটা মুছুন</button>
+  </div>
+
+  <!-- Firebase CDN (লুকানো, কনফিগ ছাড়া কার্যকর নয়) -->
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    /*========================
+      🔧 কনফিগারেশন
+    ========================*/
+    const firebaseEnabled = false; // 🔁 true করলে Cloud Sync চালু হবে
+    const firebaseConfig = {
+      apiKey: "",
+      authDomain: "",
+      projectId: "",
+      storageBucket: "",
+      messagingSenderId: "",
+      appId: ""
+    };
+
+    /*========================
+      📦 লোকাল স্টোরেজ / ক্লাউড
+    ========================*/
+    let db; // Firestore রেফারেন্স
+    if (firebaseEnabled && firebaseConfig.apiKey) {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+    }
+
+    const LS_EMP = "employees";
+    const LS_ATT = "attendance";
+
+    function loadEmployees() {
+      if (db) return db.doc("attendance/data").get().then(snap => snap.exists ? snap.data().employees || [] : []);
+      return Promise.resolve(JSON.parse(localStorage.getItem(LS_EMP)) || []);
+    }
+
+    function saveEmployees(emp) {
+      if (db) return db.doc("attendance/data").set({ employees: emp }, { merge: true });
+      localStorage.setItem(LS_EMP, JSON.stringify(emp));
+      return Promise.resolve();
+    }
+
+    function loadAttendance() {
+      if (db) return db.doc("attendance/data").get().then(snap => snap.exists ? snap.data().attendance || {} : {});
+      return Promise.resolve(JSON.parse(localStorage.getItem(LS_ATT)) || {});
+    }
+
+    function saveAttendance(att) {
+      if (db) return db.doc("attendance/data").set({ attendance: att }, { merge: true });
+      localStorage.setItem(LS_ATT, JSON.stringify(att));
+      return Promise.resolve();
+    }
+
+    /*========================
+      🏁 UI এলিমেন্টস
+    ========================*/
+    const dateInput       = document.getElementById("date");
+    const viewSelect      = document.getElementById("viewSelect");
+    const employeeNameInp = document.getElementById("employeeName");
+    const addEmployeeBtn  = document.getElementById("addEmployeeBtn");
+    const attendanceHead  = document.getElementById("attendanceHead");
+    const attendanceBody  = document.getElementById("attendanceBody");
+
+    const saveBtn   = document.getElementById("saveBtn");
+    const exportBtn = document.getElementById("exportBtn");
+    const printBtn  = document.getElementById("printBtn");
+    const clearBtn  = document.getElementById("clearBtn");
+
+    /*========================
+      📅 ডেটা
+    ========================*/
+    let employees = [];
+    let attendance = {};
+
+    (async function init() {
+      dateInput.valueAsDate = new Date();
+      employees = await loadEmployees();
+      attendance = await loadAttendance();
+      renderTable();
+    })();
+
+    /*========================
+      ⌚️ ইউটিল ফাংশন
+    ========================*/
+    function formatDateISO(d) { return d.toISOString().slice(0,10); }
+    function getWeekDates(startDate) {
+      const dates = [];
+      const d = new Date(startDate);
+      d.setDate(d.getDate() - d.getDay() + 1); // Monday as first day
+      for (let i=0;i<7;i++) {
+        dates.push(formatDateISO(d));
+        d.setDate(d.getDate()+1);
+      }
+      return dates;
+    }
+    function getMonthDates(startDate) {
+      const dates = [];
+      const d = new Date(startDate);
+      d.setDate(1);
+      while (d.getMonth() === new Date(startDate).getMonth()) {
+        dates.push(formatDateISO(d));
+        d.setDate(d.getDate()+1);
+      }
+      return dates;
+    }
+
+    /*========================
+      🖥️ টেবিল রেন্ডার
+    ========================*/
+    function renderTable() {
+      const view = viewSelect.value;
+      const baseDate = dateInput.value || formatDateISO(new Date());
+      let dateRange = [ baseDate ];
+      if (view === "week") dateRange = getWeekDates(baseDate);
+      if (view === "month") dateRange = getMonthDates(baseDate);
+
+      // Head
+      attendanceHead.innerHTML = "";
+      const headRow = document.createElement("tr");
+      const nameTh = document.createElement("th");
+      nameTh.textContent = "কর্মচারীর নাম";
+      headRow.appendChild(nameTh);
+
+      dateRange.forEach(dt => {
+        const th = document.createElement("th");
+        th.textContent = dt.split("-").slice(2).join("-"); // show DD or DD-MM
+        headRow.appendChild(th);
+      });
+
+      const optTh = document.createElement("th");
+      optTh.textContent = "অপশন";
+      headRow.appendChild(optTh);
+
+      attendanceHead.appendChild(headRow);
+
+      // Body
+      attendanceBody.innerHTML = "";
+      employees.forEach((name, idx) => {
+        const tr = document.createElement("tr");
+
+        // Name
+        const tdName = document.createElement("td");
+        tdName.textContent = name;
+        tr.appendChild(tdName);
+
+        // Attendance cells
+        dateRange.forEach(dt => {
+          const td = document.createElement("td");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = !!(attendance[dt]?.[name]);
+          cb.addEventListener("change", () => {
+            setStatus(name, cb.checked, dt);
+            saveAttendance(attendance);
+          });
+          td.appendChild(cb);
+          tr.appendChild(td);
+        });
+
+        // Options
+        const tdOpt = document.createElement("td");
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "ডিলিট";
+        delBtn.addEventListener("click", async () => {
+          if (confirm("আপনি কি নিশ্চিত এই কর্মচারীকে মুছে ফেলতে চান?")) {
+            employees.splice(idx,1);
+            await saveEmployees(employees);
+            renderTable();
+          }
+        });
+        tdOpt.appendChild(delBtn);
+        tr.appendChild(tdOpt);
+
+        attendanceBody.appendChild(tr);
+      });
+    }
+
+    function setStatus(name, status, dateKey=dateInput.value) {
+      if (!attendance[dateKey]) attendance[dateKey] = {};
+      attendance[dateKey][name] = status;
+    }
+
+    function generateCSV() {
+      const view = viewSelect.value;
+      const baseDate = dateInput.value || formatDateISO(new Date());
+      let dateRange = [ baseDate ];
+      if (view === "week") dateRange = getWeekDates(baseDate);
+      if (view === "month") dateRange = getMonthDates(baseDate);
+
+      let csv = ["Name, " + dateRange.join(", ")];
+      employees.forEach(name => {
+        const row = [name];
+        dateRange.forEach(dt => {
+          row.push(attendance[dt]?.[name] ? "Present" : "Absent");
+        });
+        csv.push(row.join(", "));
+      });
+      return csv.join("\n");
+    }
+
+    /*========================
+      🎛️ ইভেন্ট লিস্‌নার
+    ========================*/
+    addEmployeeBtn.addEventListener("click", async () => {
+      const name = employeeNameInp.value.trim();
+      if (!name) return alert("নাম লিখুন।");
+      if (employees.includes(name)) return alert("এই নাম ইতিমধ্যে তালিকায় আছে।");
+      employees.push(name);
+      await saveEmployees(employees);
+      employeeNameInp.value = "";
+      renderTable();
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      await saveAttendance(attendance);
+      alert("হাজিরা সংরক্ষণ হয়েছে!");
+    });
+
+    exportBtn.addEventListener("click", () => {
+      const blob = new Blob([generateCSV()], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `attendance_${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    printBtn.addEventListener("click", () => window.print());
+
+    clearBtn.addEventListener("click", async () => {
+      if (confirm("আপনি কি নিশ্চিত সমস্ত তথ্য মুছে ফেলতে চান?")) {
+        if (db) {
+          await db.doc("attendance/data").set({ employees: [], attendance: {} });
+        } else {
+          localStorage.removeItem(LS_EMP);
+          localStorage.removeItem(LS_ATT);
+        }
+        location.reload();
+      }
+    });
+
+    dateInput.addEventListener("change", renderTable);
+    viewSelect.addEventListener("change", renderTable);
+  </script>
+</body>
+</html>
